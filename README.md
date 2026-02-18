@@ -21,6 +21,11 @@ The Thunderbird extension runs a local HTTP server on port 8765. The Node.js bri
 **1. Install the extension**
 
 ```bash
+# With Nix
+nix build github:gui-wf/thunderbird-mcp#extension
+# Then install result/thunderbird-mcp.xpi in Thunderbird
+
+# Or manually
 ./scripts/build.sh
 ./scripts/install.sh
 ```
@@ -29,7 +34,20 @@ Restart Thunderbird.
 
 **2. Configure your MCP client**
 
-Example for `~/.claude.json`:
+Example for `~/.claude.json` (with Nix):
+
+```json
+{
+  "mcpServers": {
+    "thunderbird-mail": {
+      "command": "nix",
+      "args": ["run", "github:gui-wf/thunderbird-mcp"]
+    }
+  }
+}
+```
+
+Or without Nix:
 
 ```json
 {
