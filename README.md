@@ -46,12 +46,16 @@ Example for `~/.claude.json`:
 
 | Tool | What it does |
 |------|--------------|
+| `listAccounts` | List email accounts and identities |
 | `searchMessages` | Find emails by subject, sender, or recipient |
-| `getMessage` | Read full email content |
+| `getMessage` | Read full email with optional attachment download to temp files |
+| `listFolders` | List all mail folders with URIs and message counts |
+| `updateMessage` | Mark read/unread, flag/unflag, move, or trash a message |
+| `sendMail` | Open a compose window with pre-filled content |
+| `replyToMessage` | Reply with proper threading and quoted original |
+| `forwardMessage` | Forward with attachments preserved |
 | `searchContacts` | Look up contacts |
 | `listCalendars` | List your calendars |
-| `sendMail` | Open a compose window with pre-filled content |
-| `replyToMessage` | Open a reply with proper threading |
 
 Compose tools open a window for you to review before sending. Nothing gets sent automatically.
 
@@ -89,7 +93,6 @@ After changing extension code, you'll need to remove it from Thunderbird, restar
 
 ## Known issues
 
-- Replies don't include the quoted original message (Thunderbird limitation workaround)
 - IMAP folder databases can be stale until you click on them
 - Email bodies with weird control characters get sanitized to avoid breaking JSON
 

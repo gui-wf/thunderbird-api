@@ -60,12 +60,13 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
       {
         name: "getMessage",
         title: "Get Message",
-        description: "Read the full content of an email message by its ID",
+        description: "Read the full content of an email message by its ID, with optional attachment saving to disk",
         inputSchema: {
           type: "object",
           properties: {
             messageId: { type: "string", description: "The message ID (from searchMessages results)" },
-            folderPath: { type: "string", description: "The folder URI path (from searchMessages results)" }
+            folderPath: { type: "string", description: "The folder URI path (from searchMessages results)" },
+            saveAttachments: { type: "boolean", description: "Save attachments to temp files and return file paths (default: false, returns metadata only)" }
           },
           required: ["messageId", "folderPath"],
         },
@@ -146,6 +147,35 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             attachments: { type: "array", items: { type: "string" }, description: "Array of additional file paths to attach" },
           },
           required: ["messageId", "folderPath", "to"],
+        },
+      },
+      {
+        name: "listFolders",
+        title: "List Folders",
+        description: "List all mail folders with URIs and message counts",
+        inputSchema: {
+          type: "object",
+          properties: {
+            accountId: { type: "string", description: "Filter to a specific account ID (optional)" }
+          },
+          required: [],
+        },
+      },
+      {
+        name: "updateMessage",
+        title: "Update Message",
+        description: "Mark a message as read/unread, flag/unflag, move to another folder, or trash it",
+        inputSchema: {
+          type: "object",
+          properties: {
+            messageId: { type: "string", description: "The message ID (from searchMessages results)" },
+            folderPath: { type: "string", description: "The folder URI path (from searchMessages results)" },
+            read: { type: "boolean", description: "Mark as read (true) or unread (false)" },
+            flagged: { type: "boolean", description: "Mark as flagged (true) or unflagged (false)" },
+            moveTo: { type: "string", description: "Folder URI to move the message to (from listFolders)" },
+            trash: { type: "boolean", description: "Move the message to the Trash folder" }
+          },
+          required: ["messageId", "folderPath"],
         },
       },
     ];
@@ -349,6 +379,36 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               return from ? `unknown identity: ${from}, using default` : "";
             }
 
+            /**
+             * Finds a message by ID in a folder. Returns { msgHdr, folder } or { error }.
+             * Extracts the repeated folder-lookup + db-enumerate pattern.
+             */
+            function findMessage(messageId, folderPath) {
+              const folder = MailServices.folderLookup.getFolderForURL(folderPath);
+              if (!folder) {
+                return { error: `Folder not found: ${folderPath}` };
+              }
+
+              const db = folder.msgDatabase;
+              if (!db) {
+                return { error: "Could not access folder database" };
+              }
+
+              let msgHdr = null;
+              for (const hdr of db.enumerateMessages()) {
+                if (hdr.messageId === messageId) {
+                  msgHdr = hdr;
+                  break;
+                }
+              }
+
+              if (!msgHdr) {
+                return { error: `Message not found: ${messageId}` };
+              }
+
+              return { msgHdr, folder };
+            }
+
             function searchMessages(query, startDate, endDate, maxResults, sortOrder) {
               const results = [];
               const lowerQuery = (query || "").toLowerCase();
@@ -491,39 +551,60 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               }
             }
 
-            function getMessage(messageId, folderPath) {
-              return new Promise((resolve) => {
+            function listFolders(accountId) {
+              const results = [];
+
+              function walkFolder(folder, accountKey, depth) {
+                results.push({
+                  name: folder.prettyName,
+                  path: folder.URI,
+                  accountId: accountKey,
+                  totalMessages: folder.getTotalMessages(false),
+                  unreadMessages: folder.getNumUnread(false),
+                  depth
+                });
+
+                if (folder.hasSubFolders) {
+                  for (const sub of folder.subFolders) {
+                    walkFolder(sub, accountKey, depth + 1);
+                  }
+                }
+              }
+
+              for (const account of MailServices.accounts.accounts) {
+                if (accountId && account.key !== accountId) continue;
                 try {
-                  const folder = MailServices.folderLookup.getFolderForURL(folderPath);
-                  if (!folder) {
-                    resolve({ error: `Folder not found: ${folderPath}` });
-                    return;
-                  }
-
-                  const db = folder.msgDatabase;
-                  if (!db) {
-                    resolve({ error: "Could not access folder database" });
-                    return;
-                  }
-
-                  let msgHdr = null;
-                  for (const hdr of db.enumerateMessages()) {
-                    if (hdr.messageId === messageId) {
-                      msgHdr = hdr;
-                      break;
+                  const root = account.incomingServer.rootFolder;
+                  if (root.hasSubFolders) {
+                    for (const sub of root.subFolders) {
+                      walkFolder(sub, account.key, 0);
                     }
                   }
+                } catch {
+                  // Skip inaccessible accounts
+                }
+              }
 
-                  if (!msgHdr) {
-                    resolve({ error: `Message not found: ${messageId}` });
+              return results;
+            }
+
+            const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50MB
+
+            function getMessage(messageId, folderPath, saveAttachments) {
+              return new Promise((resolve) => {
+                try {
+                  const found = findMessage(messageId, folderPath);
+                  if (found.error) {
+                    resolve(found);
                     return;
                   }
+                  const { msgHdr } = found;
 
                   const { MsgHdrToMimeMessage } = ChromeUtils.importESModule(
                     "resource:///modules/gloda/MimeMessage.sys.mjs"
                   );
 
-                  MsgHdrToMimeMessage(msgHdr, null, (aMsgHdr, aMimeMsg) => {
+                  MsgHdrToMimeMessage(msgHdr, null, async (aMsgHdr, aMimeMsg) => {
                     if (!aMimeMsg) {
                       resolve({ error: "Could not parse message" });
                       return;
@@ -531,20 +612,96 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
                     let body = "";
                     try {
-                      // sanitizeForJson removes control chars that break JSON
                       body = sanitizeForJson(aMimeMsg.coerceBodyToPlaintext());
                     } catch {
                       body = "(Could not extract body text)";
                     }
 
+                    // Collect attachment metadata
+                    const attachments = [];
+                    const rawAttachments = aMimeMsg.allUserAttachments || [];
+
+                    if (saveAttachments && rawAttachments.length > 0) {
+                      // Create temp directory for this message
+                      const sanitizedId = messageId.replace(/[^a-zA-Z0-9._-]/g, "_");
+                      const tmpDir = Cc["@mozilla.org/file/directory_service;1"]
+                        .getService(Ci.nsIProperties)
+                        .get("TmpD", Ci.nsIFile);
+                      tmpDir.append("thunderbird-mcp");
+                      if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+                      tmpDir.append(sanitizedId);
+                      if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+
+                      for (const att of rawAttachments) {
+                        const attInfo = {
+                          name: att.name,
+                          contentType: att.contentType,
+                          size: att.size || 0
+                        };
+
+                        if (attInfo.size > MAX_ATTACHMENT_SIZE) {
+                          attInfo.error = "Exceeds 50MB size limit";
+                          attachments.push(attInfo);
+                          continue;
+                        }
+
+                        try {
+                          const data = await new Promise((res, rej) => {
+                            const uri = Services.io.newURI(att.url);
+                            NetUtil.asyncFetch(
+                              { uri, loadUsingSystemPrincipal: true },
+                              (inputStream, status) => {
+                                if (!Components.isSuccessCode(status)) {
+                                  rej(new Error(`Fetch failed: ${status}`));
+                                  return;
+                                }
+                                const count = inputStream.available();
+                                const bytes = NetUtil.readInputStream(inputStream, count);
+                                res(bytes);
+                              }
+                            );
+                          });
+
+                          const outFile = tmpDir.clone();
+                          outFile.append(att.name || "attachment");
+                          // Avoid overwriting if duplicate names
+                          outFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, 0o644);
+
+                          const fos = Cc["@mozilla.org/network/file-output-stream;1"]
+                            .createInstance(Ci.nsIFileOutputStream);
+                          fos.init(outFile, 0x02 | 0x08 | 0x20, 0o644, 0);
+                          fos.write(data, data.length);
+                          fos.close();
+
+                          attInfo.filePath = outFile.path;
+                          attInfo.size = data.length;
+                        } catch (e) {
+                          attInfo.error = `Save failed: ${e.message || e}`;
+                        }
+
+                        attachments.push(attInfo);
+                      }
+                    } else {
+                      for (const att of rawAttachments) {
+                        attachments.push({
+                          name: att.name,
+                          contentType: att.contentType,
+                          size: att.size || 0
+                        });
+                      }
+                    }
+
                     resolve({
                       id: msgHdr.messageId,
-                      subject: msgHdr.subject,
-                      author: msgHdr.author,
-                      recipients: msgHdr.recipients,
+                      subject: msgHdr.mime2DecodedSubject || msgHdr.subject,
+                      author: msgHdr.mime2DecodedAuthor || msgHdr.author,
+                      recipients: msgHdr.mime2DecodedRecipients || msgHdr.recipients,
                       ccList: msgHdr.ccList,
                       date: msgHdr.date ? new Date(msgHdr.date / 1000).toISOString() : null,
-                      body
+                      read: msgHdr.isRead,
+                      flagged: msgHdr.isFlagged,
+                      body,
+                      attachments
                     });
                   }, true, { examineEncryptedParts: true });
 
@@ -617,30 +774,12 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             function replyToMessage(messageId, folderPath, body, replyAll, isHtml, to, cc, bcc, from, attachments) {
               return new Promise((resolve) => {
                 try {
-                  const folder = MailServices.folderLookup.getFolderForURL(folderPath);
-                  if (!folder) {
-                    resolve({ error: `Folder not found: ${folderPath}` });
+                  const found = findMessage(messageId, folderPath);
+                  if (found.error) {
+                    resolve(found);
                     return;
                   }
-
-                  const db = folder.msgDatabase;
-                  if (!db) {
-                    resolve({ error: "Could not access folder database" });
-                    return;
-                  }
-
-                  let msgHdr = null;
-                  for (const hdr of db.enumerateMessages()) {
-                    if (hdr.messageId === messageId) {
-                      msgHdr = hdr;
-                      break;
-                    }
-                  }
-
-                  if (!msgHdr) {
-                    resolve({ error: `Message not found: ${messageId}` });
-                    return;
-                  }
+                  const { msgHdr, folder } = found;
 
                   // Fetch original message body for quoting
                   const { MsgHdrToMimeMessage } = ChromeUtils.importESModule(
@@ -702,7 +841,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
                       composeFields.bcc = bcc || "";
 
-                      const origSubject = msgHdr.subject || "";
+                      const origSubject = msgHdr.mime2DecodedSubject || msgHdr.subject || "";
                       composeFields.subject = origSubject.startsWith("Re:") ? origSubject : `Re: ${origSubject}`;
 
                       // Threading headers
@@ -754,30 +893,12 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             function forwardMessage(messageId, folderPath, to, body, isHtml, cc, bcc, from, attachments) {
               return new Promise((resolve) => {
                 try {
-                  const folder = MailServices.folderLookup.getFolderForURL(folderPath);
-                  if (!folder) {
-                    resolve({ error: `Folder not found: ${folderPath}` });
+                  const found = findMessage(messageId, folderPath);
+                  if (found.error) {
+                    resolve(found);
                     return;
                   }
-
-                  const db = folder.msgDatabase;
-                  if (!db) {
-                    resolve({ error: "Could not access folder database" });
-                    return;
-                  }
-
-                  let msgHdr = null;
-                  for (const hdr of db.enumerateMessages()) {
-                    if (hdr.messageId === messageId) {
-                      msgHdr = hdr;
-                      break;
-                    }
-                  }
-
-                  if (!msgHdr) {
-                    resolve({ error: `Message not found: ${messageId}` });
-                    return;
-                  }
+                  const { msgHdr, folder } = found;
 
                   // Get attachments and body from original message
                   const { MsgHdrToMimeMessage } = ChromeUtils.importESModule(
@@ -799,7 +920,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       composeFields.cc = cc || "";
                       composeFields.bcc = bcc || "";
 
-                      const origSubject = msgHdr.subject || "";
+                      const origSubject = msgHdr.mime2DecodedSubject || msgHdr.subject || "";
                       composeFields.subject = origSubject.startsWith("Fwd:") ? origSubject : `Fwd: ${origSubject}`;
 
                       // Get original body
@@ -878,6 +999,106 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               });
             }
 
+            /**
+             * Updates message state: read/flagged status, move to folder, or trash.
+             * Operations applied in order: read, flagged, then move/trash.
+             */
+            function updateMessage(messageId, folderPath, opts) {
+              return new Promise((resolve) => {
+                try {
+                  const found = findMessage(messageId, folderPath);
+                  if (found.error) {
+                    resolve(found);
+                    return;
+                  }
+                  const { msgHdr, folder } = found;
+                  const actions = [];
+
+                  // Mark read/unread
+                  if (opts.read !== undefined) {
+                    folder.msgDatabase.markRead(msgHdr.messageKey, opts.read, null);
+                    actions.push(opts.read ? "marked read" : "marked unread");
+                  }
+
+                  // Flag/unflag
+                  if (opts.flagged !== undefined) {
+                    folder.msgDatabase.markMarked(msgHdr.messageKey, opts.flagged, null);
+                    actions.push(opts.flagged ? "flagged" : "unflagged");
+                  }
+
+                  // Move to folder or trash (mutually exclusive, trash takes precedence)
+                  const targetURI = opts.trash ? null : opts.moveTo;
+                  const moveToTrash = !!opts.trash;
+
+                  if (moveToTrash || targetURI) {
+                    let destFolder;
+
+                    if (moveToTrash) {
+                      // Find the Trash folder for this account
+                      // Trash flag is nsMsgFolderFlags.Trash = 0x00000100
+                      const root = folder.server.rootFolder;
+                      destFolder = root.getFolderWithFlags(0x00000100);
+                      if (!destFolder) {
+                        resolve({ error: "Trash folder not found for this account" });
+                        return;
+                      }
+                    } else {
+                      destFolder = MailServices.folderLookup.getFolderForURL(targetURI);
+                      if (!destFolder) {
+                        resolve({ error: `Destination folder not found: ${targetURI}` });
+                        return;
+                      }
+                    }
+
+                    if (destFolder.URI === folder.URI) {
+                      actions.push("already in destination folder");
+                      resolve({ success: true, actions });
+                      return;
+                    }
+
+                    // Create an nsIMutableArray with the message header
+                    const msgArray = Cc["@mozilla.org/array;1"].createInstance(Ci.nsIMutableArray);
+                    msgArray.appendElement(msgHdr);
+
+                    const copyListener = {
+                      QueryInterface: ChromeUtils.generateQI(["nsIMsgCopyServiceListener"]),
+                      OnStartCopy() {},
+                      OnProgress() {},
+                      SetMessageKey() {},
+                      GetMessageId() { return null; },
+                      OnStopCopy(statusCode) {
+                        if (Components.isSuccessCode(statusCode)) {
+                          actions.push(moveToTrash ? "trashed" : `moved to ${destFolder.prettyName}`);
+                          resolve({ success: true, actions });
+                        } else {
+                          resolve({ error: `Move failed with status: ${statusCode}`, actions });
+                        }
+                      }
+                    };
+
+                    MailServices.copy.copyMessages(
+                      folder,        // source folder
+                      msgArray,      // messages
+                      destFolder,    // destination
+                      true,          // isMove
+                      copyListener,  // listener
+                      null,          // msgWindow
+                      false          // allowUndo
+                    );
+                    return;
+                  }
+
+                  if (actions.length === 0) {
+                    resolve({ success: true, actions: ["no changes requested"] });
+                  } else {
+                    resolve({ success: true, actions });
+                  }
+                } catch (e) {
+                  resolve({ error: e.toString() });
+                }
+              });
+            }
+
             async function callTool(name, args) {
               switch (name) {
                 case "listAccounts":
@@ -885,7 +1106,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 case "searchMessages":
                   return searchMessages(args.query || "", args.startDate, args.endDate, args.maxResults, args.sortOrder);
                 case "getMessage":
-                  return await getMessage(args.messageId, args.folderPath);
+                  return await getMessage(args.messageId, args.folderPath, args.saveAttachments);
                 case "searchContacts":
                   return searchContacts(args.query || "");
                 case "listCalendars":
@@ -896,6 +1117,10 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                   return await replyToMessage(args.messageId, args.folderPath, args.body, args.replyAll, args.isHtml, args.to, args.cc, args.bcc, args.from, args.attachments);
                 case "forwardMessage":
                   return await forwardMessage(args.messageId, args.folderPath, args.to, args.body, args.isHtml, args.cc, args.bcc, args.from, args.attachments);
+                case "listFolders":
+                  return listFolders(args.accountId);
+                case "updateMessage":
+                  return await updateMessage(args.messageId, args.folderPath, args);
                 default:
                   throw new Error(`Unknown tool: ${name}`);
               }
