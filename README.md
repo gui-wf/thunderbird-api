@@ -6,15 +6,20 @@
 
 > Inspired by [bb1/thunderbird-mcp](https://github.com/bb1/thunderbird-mcp). Rewritten from scratch with a bundled HTTP server, proper MIME decoding, and UTF-8 handling throughout.
 
-An MCP server that lets you read email, search contacts, and draft replies in Thunderbird.
+MCP server and CLI for Thunderbird - read email, search contacts, manage messages, and draft replies.
 
 ## How it works
 
 ```
 MCP Client <--stdio--> mcp-bridge.cjs <--HTTP--> Thunderbird Extension
+                                          ^
+thunderbird-cli  ------HTTP (JSON-RPC)----+
 ```
 
-The Thunderbird extension runs a local HTTP server on port 8765. The Node.js bridge translates between MCP's stdio protocol and HTTP so MCP clients can talk to it.
+The Thunderbird extension runs a local HTTP server on port 8765. Two interfaces talk to it:
+
+- **MCP bridge** (`mcp-bridge.cjs`) - translates MCP's stdio protocol to HTTP for AI assistants
+- **CLI** (`thunderbird-cli.cjs`) - direct terminal access with subcommands for all operations
 
 ## Setup
 
@@ -77,6 +82,21 @@ Or without Nix:
 
 Compose tools open a window for you to review before sending. Nothing gets sent automatically.
 
+## CLI usage
+
+```bash
+thunderbird-cli search "quarterly report"       # Search messages
+thunderbird-cli get "<id>" "<folder>"            # Read a message
+thunderbird-cli folders                          # List all folders
+thunderbird-cli accounts                         # List accounts
+thunderbird-cli update "<id>" "<folder>" --read  # Mark as read
+thunderbird-cli update "<id>" "<folder>" --trash # Trash a message
+thunderbird-cli contacts "alice"                 # Search contacts
+thunderbird-cli help                             # Full usage info
+```
+
+Install with Nix: `nix build github:gui-wf/thunderbird-api#cli` or `nix run github:gui-wf/thunderbird-api#cli`.
+
 ## Security
 
 The extension only listens on localhost, but any local process can access it while Thunderbird is running. Keep this in mind on shared machines.
@@ -118,13 +138,15 @@ After changing extension code, you'll need to remove it from Thunderbird, restar
 
 ```
 thunderbird-api/
-├── mcp-bridge.cjs              # stdio-to-HTTP bridge
+├── mcp-bridge.cjs              # MCP stdio-to-HTTP bridge
+├── thunderbird-cli.cjs         # CLI tool
+├── flake.nix                   # Nix packaging (bridge, CLI, extension)
 ├── extension/
 │   ├── manifest.json
 │   ├── background.js           # Extension entry point
 │   ├── httpd.sys.mjs           # Mozilla's HTTP server lib
 │   └── mcp_server/
-│       ├── api.js              # The actual MCP implementation
+│       ├── api.js              # The actual API implementation
 │       └── schema.json
 └── scripts/
     ├── build.sh
