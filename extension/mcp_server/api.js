@@ -488,12 +488,12 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                         ccList.includes(lowerQuery)) {
                       results.push({
                         id: msgHdr.messageId,
-                        subject: sanitizeForJson(msgHdr.mime2DecodedSubject || msgHdr.subject),
-                        author: sanitizeForJson(msgHdr.mime2DecodedAuthor || msgHdr.author),
-                        recipients: sanitizeForJson(msgHdr.mime2DecodedRecipients || msgHdr.recipients),
-                        ccList: sanitizeForJson(msgHdr.ccList),
+                        subject: msgHdr.mime2DecodedSubject || msgHdr.subject,
+                        author: msgHdr.mime2DecodedAuthor || msgHdr.author,
+                        recipients: msgHdr.mime2DecodedRecipients || msgHdr.recipients,
+                        ccList: msgHdr.ccList,
                         date: msgHdr.date ? new Date(msgHdr.date / 1000).toISOString() : null,
-                        folder: sanitizeForJson(folder.prettyName),
+                        folder: folder.prettyName,
                         folderPath: folder.URI,
                         read: msgHdr.isRead,
                         flagged: msgHdr.isFlagged,
@@ -742,7 +742,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                     let body = "";
                     let bodyIsHtml = false;
                     try {
-                      body = sanitizeForJson(aMimeMsg.coerceBodyToPlaintext()) || "";
+                      body = aMimeMsg.coerceBodyToPlaintext() || "";
                     } catch {
                       body = "";
                     }
@@ -764,8 +764,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       if (found) {
                         if (found.isHtml) {
                           bodyIsHtml = true;
-                          body = sanitizeForJson(
-                            found.content
+                          body = found.content
                               .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
                               .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
                               .replace(/<[^>]+>/g, " ")
@@ -776,10 +775,9 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                               .replace(/&quot;/g, '"')
                               .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
                               .replace(/\s+/g, " ")
-                              .trim()
-                          );
+                              .trim();
                         } else {
-                          body = sanitizeForJson(found.content);
+                          body = found.content;
                         }
                       }
                     }
