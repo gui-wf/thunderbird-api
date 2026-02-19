@@ -1,5 +1,6 @@
 # Build output
 dist/
+target/
 
 # OS files
 .DS_Store
@@ -15,11 +16,6 @@ Thumbs.db
 
 # MCP config (contains local paths)
 .mcp.json
-
-# Node.js
-node_modules/
-package-lock.json
-npm-debug.log*
 
 # Nix
 result

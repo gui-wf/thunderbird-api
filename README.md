@@ -11,15 +11,15 @@ MCP server and CLI for Thunderbird - read email, search contacts, manage message
 ## How it works
 
 ```
-MCP Client <--stdio--> mcp-bridge.cjs <--HTTP--> Thunderbird Extension
-                                          ^
-thunderbird-cli  ------HTTP (JSON-RPC)----+
+MCP Client <--stdio--> thunderbird-api <--HTTP--> Thunderbird Extension
+                                           ^
+thunderbird-cli  ------HTTP (JSON-RPC)-----+
 ```
 
-The Thunderbird extension runs a local HTTP server on port 8765. Two interfaces talk to it:
+The Thunderbird extension runs a local HTTP server on port 8765. Two Rust binaries talk to it:
 
-- **MCP bridge** (`mcp-bridge.cjs`) - translates MCP's stdio protocol to HTTP for AI assistants
-- **CLI** (`thunderbird-cli.cjs`) - direct terminal access with subcommands for all operations
+- **MCP bridge** (`thunderbird-api`) - translates MCP's stdio protocol to HTTP for AI assistants
+- **CLI** (`thunderbird-cli`) - direct terminal access with subcommands for all operations
 
 ## Setup
 
@@ -30,9 +30,8 @@ The Thunderbird extension runs a local HTTP server on port 8765. Two interfaces 
 nix build github:gui-wf/thunderbird-api#extension
 # Then install result/thunderbird-api.xpi in Thunderbird
 
-# Or manually
-./scripts/build.sh
-./scripts/install.sh
+# Or build from source
+cd extension && zip -r ../thunderbird-api.xpi .
 ```
 
 Restart Thunderbird.
@@ -52,7 +51,7 @@ Example for `~/.claude.json` (with Nix):
 }
 ```
 
-Or without Nix:
+Or with a local build:
 
 ```json
 {
@@ -104,27 +103,33 @@ The extension only listens on localhost, but any local process can access it whi
 ## Troubleshooting
 
 **Extension not loading?**
-Check Tools → Add-ons and Themes. For errors: Tools → Developer Tools → Error Console.
+Check Tools > Add-ons and Themes. For errors: Tools > Developer Tools > Error Console.
 
 **Connection refused?**
 Make sure Thunderbird is running and the extension is enabled.
 
 **Can't find recent emails?**
-IMAP folders can be stale. Click on the folder in Thunderbird to sync, or right-click → Properties → Repair Folder.
+IMAP folders can be stale. Click on the folder in Thunderbird to sync, or right-click > Properties > Repair Folder.
 
 ## Development
 
 ```bash
-# Build the extension
-./scripts/build.sh
+# Enter dev shell
+nix develop
 
-# Test the HTTP API directly
+# Build
+cargo build
+
+# Test
+cargo test
+
+# Test the HTTP API directly (Thunderbird must be running)
 curl -X POST http://localhost:8765 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
 # Test the bridge
-echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | node mcp-bridge.cjs
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | cargo run --bin thunderbird-api
 ```
 
 After changing extension code, you'll need to remove it from Thunderbird, restart, reinstall, and restart again. Thunderbird caches aggressively.
@@ -138,9 +143,19 @@ After changing extension code, you'll need to remove it from Thunderbird, restar
 
 ```
 thunderbird-api/
-├── mcp-bridge.cjs              # MCP stdio-to-HTTP bridge
-├── thunderbird-cli.cjs         # CLI tool
-├── flake.nix                   # Nix packaging (bridge, CLI, extension)
+├── Cargo.toml                  # Rust crate with two binary targets
+├── src/
+│   ├── lib.rs                  # Library re-exports
+│   ├── types.rs                # JSON-RPC request/response types
+│   ├── sanitize.rs             # JSON control-char sanitization
+│   ├── client.rs               # HTTP client for Thunderbird extension
+│   ├── bin/
+│   │   ├── thunderbird_api.rs  # MCP stdio bridge
+│   │   └── thunderbird_cli.rs  # CLI tool
+│   └── cli/
+│       ├── mod.rs              # Clap definitions
+│       ├── commands.rs         # Subcommand dispatch
+│       └── format.rs           # Output formatting
 ├── extension/
 │   ├── manifest.json
 │   ├── background.js           # Extension entry point
@@ -148,9 +163,7 @@ thunderbird-api/
 │   └── mcp_server/
 │       ├── api.js              # The actual API implementation
 │       └── schema.json
-└── scripts/
-    ├── build.sh
-    └── install.sh
+└── flake.nix                   # Nix packaging (bridge + CLI, extension)
 ```
 
 ## License

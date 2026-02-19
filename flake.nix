@@ -1,139 +1,112 @@
 {
-  description = "MCP server for Thunderbird - AI assistant access to email, contacts, and calendars";
+  description = "MCP server and CLI for Thunderbird - AI assistant access to email, contacts, and calendars";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    flake-utils.url = "github:numtide/flake-utils";
   };
 
   outputs =
+    { self, nixpkgs }:
+    let
+      supportedSystems = [
+        "x86_64-linux"
+        "aarch64-linux"
+        "x86_64-darwin"
+        "aarch64-darwin"
+      ];
+      forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
+    in
     {
-      self,
-      nixpkgs,
-      flake-utils,
-    }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = nixpkgs.legacyPackages.${system};
+      packages = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
 
-        # The MCP bridge only uses Node.js built-ins (http, readline).
-        # No npm install needed.
-        thunderbird-api = pkgs.stdenvNoCC.mkDerivation {
-          pname = "thunderbird-api";
-          version = "0.2.0";
-          src = ./.;
-
-          dontBuild = true;
-          dontConfigure = true;
-
-          nativeBuildInputs = [ pkgs.makeWrapper ];
-
-          installPhase = ''
-            runHook preInstall
-
-            mkdir -p $out/{bin,lib/thunderbird-api}
-
-            # Install the bridge script
-            cp mcp-bridge.cjs $out/lib/thunderbird-api/
-
-            # Create wrapper that runs the bridge with node
-            makeWrapper ${pkgs.nodejs}/bin/node $out/bin/thunderbird-api \
-              --add-flags "$out/lib/thunderbird-api/mcp-bridge.cjs"
-
-            runHook postInstall
-          '';
-
-          meta = with pkgs.lib; {
-            description = "MCP bridge for Thunderbird email";
-            license = licenses.mit;
-            mainProgram = "thunderbird-api";
+          thunderbird-api = pkgs.rustPlatform.buildRustPackage {
+            pname = "thunderbird-api";
+            version = "0.3.0";
+            src = pkgs.lib.cleanSourceWith {
+              src = ./.;
+              filter =
+                path: type:
+                pkgs.lib.cleanSourceFilter path type && !(builtins.baseNameOf path == "target");
+            };
+            cargoLock.lockFile = ./Cargo.lock;
+            meta = with pkgs.lib; {
+              description = "MCP bridge and CLI for Thunderbird email";
+              license = licenses.mit;
+              mainProgram = "thunderbird-api";
+            };
           };
-        };
 
-        # CLI tool - same Node.js built-ins, no npm deps
-        thunderbird-cli = pkgs.stdenvNoCC.mkDerivation {
-          pname = "thunderbird-cli";
-          version = "0.2.0";
-          src = ./.;
+          thunderbird-api-extension = pkgs.stdenvNoCC.mkDerivation {
+            pname = "thunderbird-api-extension";
+            version = "0.3.0";
+            src = ./extension;
 
-          dontBuild = true;
-          dontConfigure = true;
+            dontBuild = true;
+            dontConfigure = true;
 
-          nativeBuildInputs = [ pkgs.makeWrapper ];
+            nativeBuildInputs = [ pkgs.zip ];
 
-          installPhase = ''
-            runHook preInstall
+            installPhase = ''
+              runHook preInstall
 
-            mkdir -p $out/{bin,lib/thunderbird-cli}
+              mkdir -p $out
+              zip -r $out/thunderbird-api.xpi . -x "*.DS_Store" -x "*.git*"
 
-            cp thunderbird-cli.cjs $out/lib/thunderbird-cli/
+              runHook postInstall
+            '';
 
-            makeWrapper ${pkgs.nodejs}/bin/node $out/bin/thunderbird-cli \
-              --add-flags "$out/lib/thunderbird-cli/thunderbird-cli.cjs"
-
-            runHook postInstall
-          '';
-
-          meta = with pkgs.lib; {
-            description = "Command-line interface for Thunderbird email";
-            license = licenses.mit;
-            mainProgram = "thunderbird-cli";
+            meta = with pkgs.lib; {
+              description = "Thunderbird API extension (XPI)";
+              license = licenses.mit;
+            };
           };
-        };
-
-        # Build the Thunderbird extension XPI
-        thunderbird-api-extension = pkgs.stdenvNoCC.mkDerivation {
-          pname = "thunderbird-api-extension";
-          version = "0.2.0";
-          src = ./extension;
-
-          dontBuild = true;
-          dontConfigure = true;
-
-          nativeBuildInputs = [ pkgs.zip ];
-
-          installPhase = ''
-            runHook preInstall
-
-            mkdir -p $out
-            zip -r $out/thunderbird-api.xpi . -x "*.DS_Store" -x "*.git*"
-
-            runHook postInstall
-          '';
-
-          meta = with pkgs.lib; {
-            description = "Thunderbird API extension (XPI)";
-            license = licenses.mit;
-          };
-        };
-      in
-      {
-        packages = {
+        in
+        {
           default = thunderbird-api;
-          cli = thunderbird-cli;
+          cli = thunderbird-api;
           extension = thunderbird-api-extension;
-        };
+        }
+      );
 
-        apps = {
+      apps = forAllSystems (
+        system:
+        let
+          pkg = self.packages.${system}.default;
+        in
+        {
           default = {
             type = "app";
-            program = "${thunderbird-api}/bin/thunderbird-api";
+            program = "${pkg}/bin/thunderbird-api";
           };
           cli = {
             type = "app";
-            program = "${thunderbird-cli}/bin/thunderbird-cli";
+            program = "${pkg}/bin/thunderbird-cli";
           };
-        };
+        }
+      );
 
-        devShells.default = pkgs.mkShell {
-          buildInputs = with pkgs; [
-            nodejs
-            zip
-            curl
-            jq
-          ];
-        };
-      }
-    );
+      devShells = forAllSystems (
+        system:
+        let
+          pkgs = nixpkgs.legacyPackages.${system};
+        in
+        {
+          default = pkgs.mkShell {
+            buildInputs = with pkgs; [
+              rustc
+              cargo
+              rust-analyzer
+              clippy
+              rustfmt
+              zip
+              curl
+              jq
+            ];
+          };
+        }
+      );
+    };
 }
