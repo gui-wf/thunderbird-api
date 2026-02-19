@@ -18,7 +18,7 @@ const resProto = Cc[
   "@mozilla.org/network/protocol;1?name=resource"
 ].getService(Ci.nsISubstitutingProtocolHandler);
 
-const API_PORT = 8766;
+const API_PORT = 8756;
 const DEFAULT_MAX_RESULTS = 50;
 const MAX_SEARCH_RESULTS_CAP = 200;
 const SEARCH_COLLECTION_CAP = 1000;

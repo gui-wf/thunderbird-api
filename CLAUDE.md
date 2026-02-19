@@ -1,11 +1,11 @@
 # Thunderbird API
 
-MCP bridge and CLI for Thunderbird email. Exposes 10 tools via a Thunderbird extension that runs a JSON-RPC HTTP server on localhost:8766.
+MCP bridge and CLI for Thunderbird email. Exposes 10 tools via a Thunderbird extension that runs a JSON-RPC HTTP server on localhost:8756.
 
 ## Architecture
 
 ```
-MCP Client <--stdio--> thunderbird-api (MCP<->JSON-RPC) <--HTTP/JSON-RPC--> Thunderbird Extension (port 8766)
+MCP Client <--stdio--> thunderbird-api (MCP<->JSON-RPC) <--HTTP/JSON-RPC--> Thunderbird Extension (port 8756)
 thunderbird-cli ---------------HTTP/JSON-RPC------------------------------>
 ```
 
@@ -86,7 +86,7 @@ cargo build
 cargo test
 
 # Direct HTTP test (Thunderbird must be running)
-curl -s -X POST http://localhost:8766 \
+curl -s -X POST http://localhost:8756 \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"listTools"}' | jq '.result.tools[].name'
 

@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::sanitize::sanitize_json;
 use crate::types::{JsonRpcRequest, JsonRpcResponse};
 
-const THUNDERBIRD_PORT: u16 = 8766;
+const THUNDERBIRD_PORT: u16 = 8756;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ThunderbirdClient {
