@@ -19,8 +19,8 @@
 
         # The MCP bridge only uses Node.js built-ins (http, readline).
         # No npm install needed.
-        thunderbird-mcp = pkgs.stdenvNoCC.mkDerivation {
-          pname = "thunderbird-mcp";
+        thunderbird-api = pkgs.stdenvNoCC.mkDerivation {
+          pname = "thunderbird-api";
           version = "0.2.0";
           src = ./.;
 
@@ -32,14 +32,14 @@
           installPhase = ''
             runHook preInstall
 
-            mkdir -p $out/{bin,lib/thunderbird-mcp}
+            mkdir -p $out/{bin,lib/thunderbird-api}
 
             # Install the bridge script
-            cp mcp-bridge.cjs $out/lib/thunderbird-mcp/
+            cp mcp-bridge.cjs $out/lib/thunderbird-api/
 
             # Create wrapper that runs the bridge with node
-            makeWrapper ${pkgs.nodejs}/bin/node $out/bin/thunderbird-mcp \
-              --add-flags "$out/lib/thunderbird-mcp/mcp-bridge.cjs"
+            makeWrapper ${pkgs.nodejs}/bin/node $out/bin/thunderbird-api \
+              --add-flags "$out/lib/thunderbird-api/mcp-bridge.cjs"
 
             runHook postInstall
           '';
@@ -47,7 +47,7 @@
           meta = with pkgs.lib; {
             description = "MCP bridge for Thunderbird email";
             license = licenses.mit;
-            mainProgram = "thunderbird-mcp";
+            mainProgram = "thunderbird-api";
           };
         };
 
@@ -83,8 +83,8 @@
         };
 
         # Build the Thunderbird extension XPI
-        thunderbird-mcp-extension = pkgs.stdenvNoCC.mkDerivation {
-          pname = "thunderbird-mcp-extension";
+        thunderbird-api-extension = pkgs.stdenvNoCC.mkDerivation {
+          pname = "thunderbird-api-extension";
           version = "0.2.0";
           src = ./extension;
 
@@ -97,28 +97,28 @@
             runHook preInstall
 
             mkdir -p $out
-            zip -r $out/thunderbird-mcp.xpi . -x "*.DS_Store" -x "*.git*"
+            zip -r $out/thunderbird-api.xpi . -x "*.DS_Store" -x "*.git*"
 
             runHook postInstall
           '';
 
           meta = with pkgs.lib; {
-            description = "Thunderbird MCP extension (XPI)";
+            description = "Thunderbird API extension (XPI)";
             license = licenses.mit;
           };
         };
       in
       {
         packages = {
-          default = thunderbird-mcp;
+          default = thunderbird-api;
           cli = thunderbird-cli;
-          extension = thunderbird-mcp-extension;
+          extension = thunderbird-api-extension;
         };
 
         apps = {
           default = {
             type = "app";
-            program = "${thunderbird-mcp}/bin/thunderbird-mcp";
+            program = "${thunderbird-api}/bin/thunderbird-api";
           };
           cli = {
             type = "app";

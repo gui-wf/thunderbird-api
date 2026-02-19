@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build the Thunderbird MCP extension
+# Build the Thunderbird API extension
 
 set -e
 
@@ -8,13 +8,13 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 EXTENSION_DIR="$PROJECT_DIR/extension"
 DIST_DIR="$PROJECT_DIR/dist"
 
-echo "Building Thunderbird MCP extension..."
+echo "Building Thunderbird API extension..."
 
 # Create dist directory
 mkdir -p "$DIST_DIR"
 
 # Package extension
 cd "$EXTENSION_DIR"
-zip -r "$DIST_DIR/thunderbird-mcp.xpi" . -x "*.DS_Store" -x "*.git*"
+zip -r "$DIST_DIR/thunderbird-api.xpi" . -x "*.DS_Store" -x "*.git*"
 
-echo "Built: $DIST_DIR/thunderbird-mcp.xpi"
+echo "Built: $DIST_DIR/thunderbird-api.xpi"

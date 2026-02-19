@@ -65,7 +65,7 @@ async function handleMessage(line) {
         result: {
           protocolVersion: '2024-11-05',
           capabilities: { tools: {} },
-          serverInfo: { name: 'thunderbird-mcp', version: '0.1.0' }
+          serverInfo: { name: 'thunderbird-api', version: '0.1.0' }
         }
       };
 

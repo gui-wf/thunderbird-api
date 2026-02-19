@@ -1,12 +1,12 @@
 #!/bin/bash
-# Install the Thunderbird MCP extension
+# Install the Thunderbird API extension
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 DIST_DIR="$PROJECT_DIR/dist"
-XPI_FILE="$DIST_DIR/thunderbird-mcp.xpi"
+XPI_FILE="$DIST_DIR/thunderbird-api.xpi"
 
 # Find Thunderbird profile directory
 find_profile() {
@@ -45,7 +45,7 @@ echo "Installing to profile: $PROFILE_DIR"
 mkdir -p "$EXTENSIONS_DIR"
 
 # Copy extension
-cp "$XPI_FILE" "$EXTENSIONS_DIR/thunderbird-mcp@luthriel.dev.xpi"
+cp "$XPI_FILE" "$EXTENSIONS_DIR/thunderbird-api@luthriel.dev.xpi"
 
 echo "Installed! Restart Thunderbird to activate."
 echo ""

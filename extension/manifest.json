@@ -5,7 +5,7 @@
   "description": "MCP server for AI assistants to access email, contacts, and calendars",
   "browser_specific_settings": {
     "gecko": {
-      "id": "thunderbird-mcp@luthriel.dev",
+      "id": "thunderbird-api@luthriel.dev",
       "strict_min_version": "102.0"
     }
   },

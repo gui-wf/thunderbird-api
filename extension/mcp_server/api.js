@@ -26,7 +26,7 @@ const SEARCH_COLLECTION_CAP = 1000;
 var mcpServer = class extends ExtensionCommon.ExtensionAPI {
   getAPI(context) {
     const extensionRoot = context.extension.rootURI;
-    const resourceName = "thunderbird-mcp";
+    const resourceName = "thunderbird-api";
 
     resProto.setSubstitutionWithFlags(
       resourceName,
@@ -185,7 +185,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
         start: async function() {
           try {
             const { HttpServer } = ChromeUtils.importESModule(
-              "resource://thunderbird-mcp/httpd.sys.mjs?" + Date.now()
+              "resource://thunderbird-api/httpd.sys.mjs?" + Date.now()
             );
             const { NetUtil } = ChromeUtils.importESModule(
               "resource://gre/modules/NetUtil.sys.mjs"
@@ -627,7 +627,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       const tmpDir = Cc["@mozilla.org/file/directory_service;1"]
                         .getService(Ci.nsIProperties)
                         .get("TmpD", Ci.nsIFile);
-                      tmpDir.append("thunderbird-mcp");
+                      tmpDir.append("thunderbird-api");
                       if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
                       tmpDir.append(sanitizedId);
                       if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
@@ -1192,7 +1192,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             });
 
             server.start(MCP_PORT);
-            console.log(`Thunderbird MCP server listening on port ${MCP_PORT}`);
+            console.log(`Thunderbird API server listening on port ${MCP_PORT}`);
             return { success: true, port: MCP_PORT };
           } catch (e) {
             console.error("Failed to start MCP server:", e);
@@ -1205,7 +1205,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
   onShutdown(isAppShutdown) {
     if (isAppShutdown) return;
-    resProto.setSubstitution("thunderbird-mcp", null);
+    resProto.setSubstitution("thunderbird-api", null);
     Services.obs.notifyObservers(null, "startupcache-invalidate");
   }
 };

@@ -1,4 +1,4 @@
-# Thunderbird MCP
+# Thunderbird API
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Thunderbird](https://img.shields.io/badge/Thunderbird-102%2B-0a84ff.svg)](https://www.thunderbird.net/)
@@ -22,8 +22,8 @@ The Thunderbird extension runs a local HTTP server on port 8765. The Node.js bri
 
 ```bash
 # With Nix
-nix build github:gui-wf/thunderbird-mcp#extension
-# Then install result/thunderbird-mcp.xpi in Thunderbird
+nix build github:gui-wf/thunderbird-api#extension
+# Then install result/thunderbird-api.xpi in Thunderbird
 
 # Or manually
 ./scripts/build.sh
@@ -41,7 +41,7 @@ Example for `~/.claude.json` (with Nix):
   "mcpServers": {
     "thunderbird-mail": {
       "command": "nix",
-      "args": ["run", "github:gui-wf/thunderbird-mcp"]
+      "args": ["run", "github:gui-wf/thunderbird-api"]
     }
   }
 }
@@ -53,8 +53,8 @@ Or without Nix:
 {
   "mcpServers": {
     "thunderbird-mail": {
-      "command": "node",
-      "args": ["/path/to/thunderbird-mcp/mcp-bridge.cjs"]
+      "command": "thunderbird-api",
+      "args": []
     }
   }
 }
@@ -117,7 +117,7 @@ After changing extension code, you'll need to remove it from Thunderbird, restar
 ## Project structure
 
 ```
-thunderbird-mcp/
+thunderbird-api/
 ├── mcp-bridge.cjs              # stdio-to-HTTP bridge
 ├── extension/
 │   ├── manifest.json
