@@ -123,6 +123,10 @@ pub enum Command {
         /// Body is HTML
         #[arg(long)]
         html: bool,
+
+        /// File paths to attach (can be repeated)
+        #[arg(long = "attach")]
+        attachments: Vec<String>,
     },
 
     /// Reply to a message
@@ -156,6 +160,10 @@ pub enum Command {
         /// Sender identity
         #[arg(long)]
         from: Option<String>,
+
+        /// File paths to attach (can be repeated)
+        #[arg(long = "attach")]
+        attachments: Vec<String>,
     },
 
     /// Forward a message
@@ -185,6 +193,10 @@ pub enum Command {
         /// Sender identity
         #[arg(long)]
         from: Option<String>,
+
+        /// File paths to attach (can be repeated)
+        #[arg(long = "attach")]
+        attachments: Vec<String>,
     },
 
     /// Search contacts

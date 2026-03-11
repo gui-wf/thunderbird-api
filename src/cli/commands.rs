@@ -121,6 +121,7 @@ pub fn run(cli: Cli) -> Result<()> {
             bcc,
             from,
             html,
+            attachments,
         } => {
             let mut args = json!({
                 "to": to,
@@ -137,6 +138,9 @@ pub fn run(cli: Cli) -> Result<()> {
             }
             if let Some(from_val) = from {
                 obj.insert("from".into(), json!(from_val));
+            }
+            if !attachments.is_empty() {
+                obj.insert("attachments".into(), json!(attachments));
             }
             let result = client.call_tool("sendMail", args)?;
             check_error(&result)?;
@@ -156,6 +160,7 @@ pub fn run(cli: Cli) -> Result<()> {
             to,
             cc,
             from,
+            attachments,
         } => {
             let mut args = json!({
                 "messageId": message_id,
@@ -174,6 +179,9 @@ pub fn run(cli: Cli) -> Result<()> {
             if let Some(from_val) = from {
                 obj.insert("from".into(), json!(from_val));
             }
+            if !attachments.is_empty() {
+                obj.insert("attachments".into(), json!(attachments));
+            }
             let result = client.call_tool("replyToMessage", args)?;
             check_error(&result)?;
             let msg = result
@@ -191,6 +199,7 @@ pub fn run(cli: Cli) -> Result<()> {
             html,
             cc,
             from,
+            attachments,
         } => {
             let mut args = json!({
                 "messageId": message_id,
@@ -207,6 +216,9 @@ pub fn run(cli: Cli) -> Result<()> {
             }
             if let Some(from_val) = from {
                 obj.insert("from".into(), json!(from_val));
+            }
+            if !attachments.is_empty() {
+                obj.insert("attachments".into(), json!(attachments));
             }
             let result = client.call_tool("forwardMessage", args)?;
             check_error(&result)?;

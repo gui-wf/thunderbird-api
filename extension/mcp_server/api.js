@@ -821,9 +821,15 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                                   rej(new Error(`Fetch failed: ${status}`));
                                   return;
                                 }
-                                const count = inputStream.available();
-                                const bytes = NetUtil.readInputStream(inputStream, count);
-                                res(bytes);
+                                const bis = Cc["@mozilla.org/binaryinputstream;1"]
+                                  .createInstance(Ci.nsIBinaryInputStream);
+                                bis.setInputStream(inputStream);
+                                const chunks = [];
+                                let avail;
+                                while ((avail = bis.available()) > 0) {
+                                  chunks.push(bis.readBytes(avail));
+                                }
+                                res(chunks.join(""));
                               }
                             );
                           });
