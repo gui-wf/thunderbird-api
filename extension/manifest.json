@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Thunderbird Bridge",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "author": "gui-wf",
   "description": "JSON-RPC bridge for CLI and AI access to email, contacts, and calendars",
   "browser_specific_settings": {
