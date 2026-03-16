@@ -352,6 +352,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       .createInstance(Ci.nsIMsgAttachment);
                     attachment.url = Services.io.newFileURI(file).spec;
                     attachment.name = file.leafName;
+                    attachment.size = file.fileSize;
                     composeFields.addAttachment(attachment);
                     result.added++;
                   } else {
