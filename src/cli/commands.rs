@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use serde_json::{json, Value};
 
@@ -38,13 +40,24 @@ pub fn run(cli: Cli) -> Result<()> {
             }
             let result = client.call_tool("searchMessages", args)?;
             check_error(&result)?;
-            format::print_messages(&result);
+            // New response shape: { messages: [...], metadata: {...} }
+            // Fall back to treating result as array for old extension versions
+            let (messages, metadata) = if let Some(msgs) = result.get("messages") {
+                (msgs.clone(), result.get("metadata").cloned())
+            } else {
+                (result.clone(), None)
+            };
+            format::print_messages(&messages);
+            if let Some(meta) = metadata {
+                format::print_search_metadata(&meta);
+            }
         }
 
         Command::Get {
             message_id,
             folder_path,
             save_attachments,
+            force_large,
         } => {
             let result = client.call_tool(
                 "getMessage",
@@ -52,6 +65,7 @@ pub fn run(cli: Cli) -> Result<()> {
                     "messageId": message_id,
                     "folderPath": folder_path,
                     "saveAttachments": save_attachments,
+                    "forceLarge": force_large,
                 }),
             )?;
             format::print_message(&result);
@@ -239,6 +253,22 @@ pub fn run(cli: Cli) -> Result<()> {
             let result = client.call_tool("listCalendars", json!({}))?;
             check_error(&result)?;
             format::print_calendars(&result);
+        }
+
+        Command::Sync { folder, timeout } => {
+            // Use a longer HTTP timeout to accommodate the extension-side sync timeout
+            // plus overhead for request/response transit
+            let http_timeout = Duration::from_millis(timeout + 10_000);
+            let sync_client = ThunderbirdClient::with_timeout(http_timeout);
+            let result = sync_client.call_tool(
+                "syncFolder",
+                json!({
+                    "folderPath": folder,
+                    "timeoutMs": timeout,
+                }),
+            )?;
+            check_error(&result)?;
+            format::print_sync_result(&result);
         }
     }
 

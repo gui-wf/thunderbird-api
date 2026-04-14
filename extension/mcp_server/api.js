@@ -66,7 +66,8 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
           properties: {
             messageId: { type: "string", description: "The message ID (from searchMessages results)" },
             folderPath: { type: "string", description: "The folder URI path (from searchMessages results)" },
-            saveAttachments: { type: "boolean", description: "Save attachments to temp files and return file paths (default: false, returns metadata only)" }
+            saveAttachments: { type: "boolean", description: "Save attachments to temp files and return file paths (default: false, returns metadata only)" },
+            forceLarge: { type: "boolean", description: "Download attachments larger than 10MB (default: false, large files are deferred)" }
           },
           required: ["messageId", "folderPath"],
         },
@@ -194,6 +195,19 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             trash: { type: "boolean", description: "Move the message to the Trash folder" }
           },
           required: ["messageId", "folderPath"],
+        },
+      },
+      {
+        name: "syncFolder",
+        title: "Sync Folder",
+        description: "Force a folder sync/refresh to get the latest messages from the server",
+        inputSchema: {
+          type: "object",
+          properties: {
+            folderPath: { type: "string", description: "Folder URI to sync (from listFolders)" },
+            timeoutMs: { type: "number", description: "Timeout in milliseconds (default: 30000)" }
+          },
+          required: ["folderPath"],
         },
       },
     ];
@@ -450,6 +464,11 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               );
               const normalizedSortOrder = sortOrder === "asc" ? "asc" : "desc";
 
+              // Freshness metadata tracking
+              let newestMessageDate = null;
+              let totalScanned = 0;
+              let foldersSearched = 0;
+
               function searchFolder(folder) {
                 if (results.length >= SEARCH_COLLECTION_CAP) return;
 
@@ -467,8 +486,12 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                   const db = folder.msgDatabase;
                   if (!db) return;
 
+                  foldersSearched++;
+
                   for (const msgHdr of db.enumerateMessages()) {
                     if (results.length >= SEARCH_COLLECTION_CAP) break;
+
+                    totalScanned++;
 
                     // IMPORTANT: Use mime2Decoded* properties for searching.
                     // Raw headers contain MIME encoding like "=?UTF-8?Q?...?="
@@ -478,6 +501,11 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                     const recipients = (msgHdr.mime2DecodedRecipients || msgHdr.recipients || "").toLowerCase();
                     const ccList = (msgHdr.ccList || "").toLowerCase();
                     const msgDateTs = msgHdr.date || 0;
+
+                    // Track the newest message date across all scanned messages
+                    if (msgDateTs > 0 && (newestMessageDate === null || msgDateTs > newestMessageDate)) {
+                      newestMessageDate = msgDateTs;
+                    }
 
                     if (startDateTs !== null && msgDateTs < startDateTs) continue;
                     if (endDateTs !== null && msgDateTs > endDateTs) continue;
@@ -521,10 +549,19 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
               results.sort((a, b) => normalizedSortOrder === "asc" ? a._dateTs - b._dateTs : b._dateTs - a._dateTs);
 
-              return results.slice(0, effectiveLimit).map(result => {
+              const messages = results.slice(0, effectiveLimit).map(result => {
                 delete result._dateTs;
                 return result;
               });
+
+              return {
+                messages,
+                metadata: {
+                  newestMessageDate: newestMessageDate ? new Date(newestMessageDate / 1000).toISOString() : null,
+                  totalScanned,
+                  foldersSearched
+                }
+              };
             }
 
             function searchContacts(query) {
@@ -718,9 +755,75 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               return results;
             }
 
+            const DEFAULT_LARGE_THRESHOLD = 10 * 1024 * 1024; // 10MB
             const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50MB
 
-            function getMessage(messageId, folderPath, saveAttachments) {
+            /**
+             * Sanitize a string for use as a filesystem path component.
+             * Replaces characters unsafe for filesystems with underscores.
+             */
+            function sanitizePath(s) {
+              let cleaned = (s || "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim() || "_";
+              // Cap at 30 chars so directory names stay short and practical
+              // while still being recognizable. Prefer a word boundary if possible.
+              if (cleaned.length > 30) {
+                const truncated = cleaned.substring(0, 30);
+                const lastSpace = truncated.lastIndexOf(" ");
+                cleaned = lastSpace > 0 ? truncated.substring(0, lastSpace) : truncated;
+              }
+              return cleaned;
+            }
+
+            /**
+             * Extract an email address from a string like "Name <email@example.com>".
+             */
+            function extractEmail(s) {
+              const match = (s || "").match(/<([^>]+)>/);
+              return match ? match[1].toLowerCase() : (s || "").trim().toLowerCase();
+            }
+
+            /**
+             * Extract account email from a folder URI.
+             * IMAP URIs look like: imap://user%40example.com@imap.example.com/INBOX
+             * The user part is between :// and @ before the host.
+             */
+            function extractAccountFromURI(uri) {
+              try {
+                const match = uri.match(/:\/\/([^@]+)@/);
+                if (match) {
+                  return decodeURIComponent(match[1]);
+                }
+              } catch {
+                // Fall through
+              }
+              return "local";
+            }
+
+            /**
+             * Build the organized output directory for a message's attachments.
+             * Path: /tmp/thunderbird-cli/<account>/<sender>/<subject>/
+             */
+            function buildAttachmentDir(folderPath, author, subject, inReplyTo) {
+              const account = sanitizePath(extractAccountFromURI(folderPath));
+              const sender = sanitizePath(extractEmail(author));
+              const subjectPrefix = inReplyTo ? "thread|" : "";
+              const subjectPart = sanitizePath(subjectPrefix + (subject || "no-subject"));
+
+              const tmpDir = Cc["@mozilla.org/file/directory_service;1"]
+                .getService(Ci.nsIProperties)
+                .get("TmpD", Ci.nsIFile);
+              tmpDir.append("thunderbird-cli");
+              if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+              tmpDir.append(account);
+              if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+              tmpDir.append(sender);
+              if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+              tmpDir.append(subjectPart);
+              if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+              return tmpDir;
+            }
+
+            function getMessage(messageId, folderPath, saveAttachments, forceLarge) {
               return new Promise((resolve) => {
                 try {
                   const found = findMessage(messageId, folderPath);
@@ -740,12 +843,97 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       return;
                     }
 
+                    // --- Content-ID mapping ---
+                    // Build a map from content-id to attachment for inline detection.
+                    const rawAttachments = aMimeMsg.allUserAttachments || [];
+                    const cidToAttachment = new Map();
+                    for (const att of rawAttachments) {
+                      let cid = null;
+                      if (att.headers) {
+                        cid = att.headers["content-id"] || att.headers["Content-ID"] || null;
+                        // Content-ID headers are wrapped in angle brackets: <cid-value>
+                        if (Array.isArray(cid)) cid = cid[0];
+                        if (cid) cid = cid.replace(/^<|>$/g, "");
+                      }
+                      if (cid) {
+                        cidToAttachment.set(cid, att);
+                      }
+                    }
+
+                    // --- Find HTML body for inline reference detection ---
+                    let htmlBody = null;
+                    function findHtmlPart(part) {
+                      const ct = (part.contentType || part.type || "").split(";")[0].trim().toLowerCase();
+                      if (ct === "text/html" && part.body) return part.body;
+                      if (part.parts) {
+                        for (const sub of part.parts) {
+                          const result = findHtmlPart(sub);
+                          if (result) return result;
+                        }
+                      }
+                      return null;
+                    }
+                    htmlBody = findHtmlPart(aMimeMsg);
+
+                    // --- Inline reference detection and numbering ---
+                    // Inline attachments are numbered first (order of appearance in HTML),
+                    // then remaining attachments are numbered sequentially after.
+                    const inlineAttachments = new Set(); // Set of raw attachment objects
+                    const inlineCidOrder = []; // Ordered list of { cid, att }
+                    if (htmlBody && cidToAttachment.size > 0) {
+                      // Find all cid: references in img src and other elements
+                      const cidRegex = /(?:src|data|href)\s*=\s*["']cid:([^"']+)["']/gi;
+                      let cidMatch;
+                      const seenCids = new Set();
+                      while ((cidMatch = cidRegex.exec(htmlBody)) !== null) {
+                        const cid = cidMatch[1];
+                        if (!seenCids.has(cid) && cidToAttachment.has(cid)) {
+                          seenCids.add(cid);
+                          const att = cidToAttachment.get(cid);
+                          inlineAttachments.add(att);
+                          inlineCidOrder.push({ cid, att });
+                        }
+                      }
+                    }
+
+                    // Assign reference numbers: inline first, then non-inline
+                    let refNum = 1;
+                    const attRefMap = new Map(); // att -> { referenceNumber, referenceTag, inline }
+                    for (const { att } of inlineCidOrder) {
+                      const ct = (att.contentType || "").toLowerCase();
+                      const isImage = ct.startsWith("image/");
+                      const tag = isImage ? `[Image #${refNum}]` : `[File #${refNum}]`;
+                      attRefMap.set(att, { referenceNumber: refNum, referenceTag: tag, inline: true });
+                      refNum++;
+                    }
+                    for (const att of rawAttachments) {
+                      if (!inlineAttachments.has(att)) {
+                        const ct = (att.contentType || "").toLowerCase();
+                        const isImage = ct.startsWith("image/");
+                        const tag = isImage ? `[Image #${refNum}]` : `[File #${refNum}]`;
+                        attRefMap.set(att, { referenceNumber: refNum, referenceTag: tag, inline: false });
+                        refNum++;
+                      }
+                    }
+
+                    // --- Body extraction with inline reference replacement ---
+                    // When inline attachments exist, we must use the HTML body so we can
+                    // replace <img src="cid:..."> with [Image #N] markers before stripping.
+                    // coerceBodyToPlaintext would silently drop those references.
                     let body = "";
                     let bodyIsHtml = false;
-                    try {
-                      body = aMimeMsg.coerceBodyToPlaintext() || "";
-                    } catch {
-                      body = "";
+                    const hasInlineRefs = inlineCidOrder.length > 0;
+
+                    if (hasInlineRefs && htmlBody) {
+                      // Use HTML body so inline cid references can be replaced with markers
+                      body = htmlBody;
+                      bodyIsHtml = true;
+                    } else {
+                      try {
+                        body = aMimeMsg.coerceBodyToPlaintext() || "";
+                      } catch {
+                        body = "";
+                      }
                     }
 
                     if (!body) {
@@ -761,53 +949,93 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                         }
                         return null;
                       }
-                      const found = findTextPart(aMimeMsg);
-                      if (found) {
-                        if (found.isHtml) {
+                      const foundPart = findTextPart(aMimeMsg);
+                      if (foundPart) {
+                        if (foundPart.isHtml) {
                           bodyIsHtml = true;
-                          body = found.content
-                              .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
-                              .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
-                              .replace(/<[^>]+>/g, " ")
-                              .replace(/&nbsp;/g, " ")
-                              .replace(/&amp;/g, "&")
-                              .replace(/&lt;/g, "<")
-                              .replace(/&gt;/g, ">")
-                              .replace(/&quot;/g, '"')
-                              .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
-                              .replace(/\s+/g, " ")
-                              .trim();
+                          body = foundPart.content;
                         } else {
-                          body = found.content;
+                          body = foundPart.content;
                         }
                       }
                     }
+
+                    // If we have HTML body content, replace inline cid references
+                    // with markers before stripping tags to plain text.
+                    if (bodyIsHtml && body) {
+                      // Replace <img src="cid:..."> tags with [Image #N] markers
+                      for (const { cid, att } of inlineCidOrder) {
+                        const ref = attRefMap.get(att);
+                        if (ref) {
+                          // Match img tags referencing this cid
+                          const imgRegex = new RegExp(`<img[^>]*src=["']cid:${cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["'][^>]*>`, "gi");
+                          body = body.replace(imgRegex, ref.referenceTag);
+                          // Also replace non-img cid references
+                          const otherRegex = new RegExp(`(src|href|data)=["']cid:${cid.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`, "gi");
+                          body = body.replace(otherRegex, ref.referenceTag);
+                        }
+                      }
+
+                      // Now strip HTML to plain text
+                      body = body
+                        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, "")
+                        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, "")
+                        .replace(/<[^>]+>/g, " ")
+                        .replace(/&nbsp;/g, " ")
+                        .replace(/&amp;/g, "&")
+                        .replace(/&lt;/g, "<")
+                        .replace(/&gt;/g, ">")
+                        .replace(/&quot;/g, '"')
+                        .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+                        .replace(/\s+/g, " ")
+                        .trim();
+                    }
                     if (!body) body = "(Could not extract body text)";
 
-                    // Collect attachment metadata
+                    // --- Attachment processing ---
                     const attachments = [];
-                    const rawAttachments = aMimeMsg.allUserAttachments || [];
+
+                    // Check for In-Reply-To header for directory naming
+                    let inReplyTo = null;
+                    try {
+                      // Try to get In-Reply-To from the MIME message headers
+                      if (aMimeMsg.headers && aMimeMsg.headers["in-reply-to"]) {
+                        inReplyTo = aMimeMsg.headers["in-reply-to"];
+                        if (Array.isArray(inReplyTo)) inReplyTo = inReplyTo[0];
+                      }
+                    } catch {
+                      // Not critical
+                    }
 
                     if (saveAttachments && rawAttachments.length > 0) {
-                      // Create temp directory for this message
-                      const sanitizedId = messageId.replace(/[^a-zA-Z0-9._-]/g, "_");
-                      const tmpDir = Cc["@mozilla.org/file/directory_service;1"]
-                        .getService(Ci.nsIProperties)
-                        .get("TmpD", Ci.nsIFile);
-                      tmpDir.append("thunderbird-api");
-                      if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
-                      tmpDir.append(sanitizedId);
-                      if (!tmpDir.exists()) tmpDir.create(Ci.nsIFile.DIRECTORY_TYPE, 0o755);
+                      const subject = msgHdr.mime2DecodedSubject || msgHdr.subject || "";
+                      const author = msgHdr.mime2DecodedAuthor || msgHdr.author || "";
+                      const tmpDir = buildAttachmentDir(folderPath, author, subject, inReplyTo);
 
                       for (const att of rawAttachments) {
+                        const ref = attRefMap.get(att) || { referenceNumber: 0, referenceTag: "", inline: false };
                         const attInfo = {
                           name: att.name,
                           contentType: att.contentType,
-                          size: att.size || 0
+                          size: att.size || 0,
+                          referenceNumber: ref.referenceNumber,
+                          referenceTag: ref.referenceTag,
+                          inline: ref.inline,
+                          filePath: null,
+                          deferred: false
                         };
 
+                        // Size-gated downloading: 10MB threshold unless forceLarge
                         if (attInfo.size > MAX_ATTACHMENT_SIZE) {
-                          attInfo.error = "Exceeds 50MB size limit";
+                          attInfo.error = "Exceeds 50MB hard size limit";
+                          attInfo.deferred = true;
+                          attachments.push(attInfo);
+                          continue;
+                        }
+
+                        if (attInfo.size > DEFAULT_LARGE_THRESHOLD && !forceLarge) {
+                          attInfo.deferred = true;
+                          attInfo.hint = "Use --force-large to download attachments over 10MB";
                           attachments.push(attInfo);
                           continue;
                         }
@@ -835,9 +1063,10 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                             );
                           });
 
+                          // Name files as <N>-<original-name>
+                          const fileName = `${ref.referenceNumber}-${att.name || "attachment"}`;
                           const outFile = tmpDir.clone();
-                          outFile.append(att.name || "attachment");
-                          // Avoid overwriting if duplicate names
+                          outFile.append(fileName);
                           outFile.createUnique(Ci.nsIFile.NORMAL_FILE_TYPE, 0o644);
 
                           const fos = Cc["@mozilla.org/network/file-output-stream;1"]
@@ -856,10 +1085,16 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                       }
                     } else {
                       for (const att of rawAttachments) {
+                        const ref = attRefMap.get(att) || { referenceNumber: 0, referenceTag: "", inline: false };
                         attachments.push({
                           name: att.name,
                           contentType: att.contentType,
-                          size: att.size || 0
+                          size: att.size || 0,
+                          referenceNumber: ref.referenceNumber,
+                          referenceTag: ref.referenceTag,
+                          inline: ref.inline,
+                          filePath: null,
+                          deferred: false
                         });
                       }
                     }
@@ -1271,6 +1506,70 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               });
             }
 
+            /**
+             * Syncs a mail folder with its server.
+             * Wraps folder.updateFolder in a Promise with nsIUrlListener
+             * to detect completion, plus a timeout fallback.
+             */
+            function syncFolder(folderPath, timeoutMs) {
+              return new Promise((resolve) => {
+                try {
+                  const timeout = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : 30000;
+                  const folder = MailServices.folderLookup.getFolderForURL(folderPath);
+                  if (!folder) {
+                    resolve({ error: `Folder not found: ${folderPath}` });
+                    return;
+                  }
+
+                  let settled = false;
+                  const timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+
+                  const urlListener = {
+                    QueryInterface: ChromeUtils.generateQI(["nsIUrlListener"]),
+                    OnStartRunningUrl() {},
+                    OnStopRunningUrl(_url, status) {
+                      if (settled) return;
+                      settled = true;
+                      timer.cancel();
+                      if (Components.isSuccessCode(status)) {
+                        resolve({
+                          folder: folderPath,
+                          status: "synced",
+                          messageCount: folder.getTotalMessages(false)
+                        });
+                      } else {
+                        resolve({
+                          folder: folderPath,
+                          status: "error",
+                          error: `Sync failed with status: ${status}`
+                        });
+                      }
+                    }
+                  };
+
+                  timer.initWithCallback({
+                    notify() {
+                      if (settled) return;
+                      settled = true;
+                      resolve({ folder: folderPath, status: "timeout" });
+                    }
+                  }, timeout, Ci.nsITimer.TYPE_ONE_SHOT);
+
+                  try {
+                    folder.updateFolder(urlListener);
+                  } catch (e) {
+                    if (!settled) {
+                      settled = true;
+                      timer.cancel();
+                      resolve({ error: `updateFolder failed: ${e}` });
+                    }
+                  }
+                } catch (e) {
+                  resolve({ error: e.toString() });
+                }
+              });
+            }
+
             async function callTool(name, args) {
               switch (name) {
                 case "listAccounts":
@@ -1278,7 +1577,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 case "searchMessages":
                   return searchMessages(args.query || "", args.startDate, args.endDate, args.maxResults, args.sortOrder);
                 case "getMessage":
-                  return await getMessage(args.messageId, args.folderPath, args.saveAttachments);
+                  return await getMessage(args.messageId, args.folderPath, args.saveAttachments, args.forceLarge);
                 case "searchContacts":
                   return searchContacts(args.query || "");
                 case "listCalendars":
@@ -1295,6 +1594,8 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                   return listFolders(args.accountId);
                 case "updateMessage":
                   return await updateMessage(args.messageId, args.folderPath, args);
+                case "syncFolder":
+                  return await syncFolder(args.folderPath, args.timeoutMs);
                 default:
                   throw new Error(`Unknown tool: ${name}`);
               }

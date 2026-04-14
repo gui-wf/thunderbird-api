@@ -133,8 +133,29 @@ pub fn print_message(msg: &Value) {
                 let size_str = att
                     .get("size")
                     .and_then(|v| v.as_f64())
-                    .map(|s| format!(" ({:.1}KB)", s / 1024.0))
+                    .map(|s| {
+                        if s >= 1_048_576.0 {
+                            format!(" ({:.1}MB)", s / 1_048_576.0)
+                        } else {
+                            format!(" ({:.1}KB)", s / 1024.0)
+                        }
+                    })
                     .unwrap_or_default();
+
+                let ref_tag = att
+                    .get("referenceTag")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(|t| format!(" {}", t))
+                    .unwrap_or_default();
+
+                let inline_str = if att.get("inline") == Some(&Value::Bool(true)) {
+                    " (inline)"
+                } else {
+                    ""
+                };
+
+                let deferred = att.get("deferred") == Some(&Value::Bool(true));
                 let path_str = att
                     .get("filePath")
                     .and_then(|v| v.as_str())
@@ -145,7 +166,16 @@ pub fn print_message(msg: &Value) {
                     .and_then(|v| v.as_str())
                     .map(|e| format!(" [{}]", e))
                     .unwrap_or_default();
-                println!("  {}{}{}{}", name, size_str, path_str, err_str);
+
+                println!("  {}{}{}{}{}{}", name, ref_tag, size_str, inline_str, path_str, err_str);
+
+                if deferred {
+                    let hint = att
+                        .get("hint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("Use --force-large to download large attachments");
+                    println!("    [deferred] {}", hint);
+                }
             }
         }
     }
@@ -278,6 +308,61 @@ pub fn print_calendars(calendars: &Value) {
             println!("  color: {}", color);
         }
     }
+}
+
+pub fn print_sync_result(result: &Value) {
+    let status = result
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let folder = result
+        .get("folder")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    match status {
+        "synced" => {
+            let count = result
+                .get("messageCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
+            println!("Synced: {} ({} messages)", folder, count);
+        }
+        "timeout" => {
+            println!("Sync timed out for: {}", folder);
+        }
+        _ => {
+            let err = result
+                .get("error")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown error");
+            eprintln!("Sync failed for {}: {}", folder, err);
+        }
+    }
+}
+
+pub fn print_search_metadata(meta: &Value) {
+    let newest = meta
+        .get("newestMessageDate")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let scanned = meta
+        .get("totalScanned")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let folders = meta
+        .get("foldersSearched")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let date_str = if newest != "unknown" {
+        format_date(newest)
+    } else {
+        newest.to_string()
+    };
+    println!(
+        "Index info: newest message {}, {} messages scanned across {} folders",
+        date_str, scanned, folders
+    );
 }
 
 fn build_flags(msg: &Value) -> String {

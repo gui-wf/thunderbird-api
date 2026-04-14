@@ -52,6 +52,10 @@ pub enum Command {
         /// Save attachments to temp files
         #[arg(long)]
         save_attachments: bool,
+
+        /// Download attachments larger than 10MB (skipped by default)
+        #[arg(long)]
+        force_large: bool,
     },
 
     /// List all mail folders
@@ -207,4 +211,14 @@ pub enum Command {
 
     /// List calendars
     Calendars,
+
+    /// Sync/refresh a mail folder with the server
+    Sync {
+        /// Folder URI to sync (from the folders command)
+        folder: String,
+
+        /// Timeout in milliseconds (default: 30000)
+        #[arg(long, default_value = "30000")]
+        timeout: u64,
+    },
 }

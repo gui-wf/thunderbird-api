@@ -21,10 +21,16 @@ impl Default for ThunderbirdClient {
 
 impl ThunderbirdClient {
     pub fn new() -> Self {
+        Self::with_timeout(REQUEST_TIMEOUT)
+    }
+
+    /// Create a client with a custom request timeout.
+    /// Use this for operations that may take longer than the default (e.g. sync).
+    pub fn with_timeout(timeout: Duration) -> Self {
         let agent = ureq::Agent::new_with_config(
             ureq::config::Config::builder()
                 .http_status_as_error(false)
-                .timeout_global(Some(REQUEST_TIMEOUT))
+                .timeout_global(Some(timeout))
                 .build(),
         );
         Self {
