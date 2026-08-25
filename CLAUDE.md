@@ -114,6 +114,7 @@ echo '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | cargo run --bin thunderb
 - Compose tools open a review window, never send automatically
 - Attachments saved to `/tmp/thunderbird-api/<sanitized-id>/` when requested
 - 50MB per-attachment size guard
+- Per-attachment fetch timeout (default 60s, `--attachment-timeout` / `attachmentTimeoutMs`). A part not in the offline store is fetched over IMAP and can stall forever; on expiry the channel is cancelled and that attachment comes back `deferred` with a hint, so the rest of the message still returns instead of hanging the whole call. `get --save-attachments` widens its own HTTP timeout to outlast that bound - otherwise the client's 30s global timeout fires first and hides which part stalled
 - Message IDs are strings (RFC 2822 Message-ID header), not integers
 - Bridge must flush stdout after every response (piped buffering)
 - JSON sanitization uses backslash parity toggle for correctness

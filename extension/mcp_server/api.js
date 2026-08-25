@@ -67,7 +67,8 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
             messageId: { type: "string", description: "The message ID (from searchMessages results)" },
             folderPath: { type: "string", description: "The folder URI path (from searchMessages results)" },
             saveAttachments: { type: "boolean", description: "Save attachments to temp files and return file paths (default: false, returns metadata only)" },
-            forceLarge: { type: "boolean", description: "Download attachments larger than 10MB (default: false, large files are deferred)" }
+            forceLarge: { type: "boolean", description: "Download attachments larger than 10MB (default: false, large files are deferred)" },
+            attachmentTimeoutMs: { type: "number", description: "Per-attachment fetch timeout in milliseconds (default: 60000). A part that is not in the offline store is fetched over IMAP and can stall; on expiry that attachment is marked deferred and the rest of the message is still returned." }
           },
           required: ["messageId", "folderPath"],
         },
@@ -757,6 +758,88 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
 
             const DEFAULT_LARGE_THRESHOLD = 10 * 1024 * 1024; // 10MB
             const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024; // 50MB
+            const DEFAULT_ATTACHMENT_TIMEOUT_MS = 60000; // per attachment
+
+            /**
+             * Fetch one attachment's bytes, bounded by a timeout.
+             *
+             * An attachment whose part is not in the local offline store is fetched
+             * over IMAP, and that fetch can stall indefinitely (server not answering,
+             * no free connection in the pool). Without a bound, one stalled part hangs
+             * the whole getMessage call and the caller sees only a client-side global
+             * timeout with no indication of which attachment was at fault. The channel
+             * is cancelled on expiry so the stalled fetch does not linger.
+             */
+            function fetchAttachmentData(url, timeoutMs) {
+              return new Promise((resolve, reject) => {
+                const timeout =
+                  Number.isFinite(timeoutMs) && timeoutMs > 0
+                    ? timeoutMs
+                    : DEFAULT_ATTACHMENT_TIMEOUT_MS;
+                let settled = false;
+                let channel = null;
+                const timer = Cc["@mozilla.org/timer;1"].createInstance(Ci.nsITimer);
+
+                const finish = (fn, arg) => {
+                  if (settled) return;
+                  settled = true;
+                  timer.cancel();
+                  fn(arg);
+                };
+
+                timer.initWithCallback(
+                  {
+                    notify() {
+                      if (settled) return;
+                      try {
+                        // Components.results, not the Cr alias: this file only ever
+                        // relies on Cc/Ci/Components being in scope.
+                        if (channel) channel.cancel(Components.results.NS_BINDING_ABORTED);
+                      } catch {
+                        // Channel already finished or cannot be cancelled.
+                      }
+                      finish(
+                        reject,
+                        new Error(
+                          `Fetch timed out after ${timeout}ms (attachment part not in the offline store?)`
+                        )
+                      );
+                    }
+                  },
+                  timeout,
+                  Ci.nsITimer.TYPE_ONE_SHOT
+                );
+
+                try {
+                  channel = NetUtil.newChannel({
+                    uri: Services.io.newURI(url),
+                    loadUsingSystemPrincipal: true
+                  });
+                  NetUtil.asyncFetch(channel, (inputStream, status) => {
+                    if (!Components.isSuccessCode(status)) {
+                      finish(reject, new Error(`Fetch failed: ${status}`));
+                      return;
+                    }
+                    try {
+                      const bis = Cc["@mozilla.org/binaryinputstream;1"].createInstance(
+                        Ci.nsIBinaryInputStream
+                      );
+                      bis.setInputStream(inputStream);
+                      const chunks = [];
+                      let avail;
+                      while ((avail = bis.available()) > 0) {
+                        chunks.push(bis.readBytes(avail));
+                      }
+                      finish(resolve, chunks.join(""));
+                    } catch (e) {
+                      finish(reject, e instanceof Error ? e : new Error(String(e)));
+                    }
+                  });
+                } catch (e) {
+                  finish(reject, e instanceof Error ? e : new Error(String(e)));
+                }
+              });
+            }
 
             /**
              * Sanitize a string for use as a filesystem path component.
@@ -823,7 +906,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
               return tmpDir;
             }
 
-            function getMessage(messageId, folderPath, saveAttachments, forceLarge) {
+            function getMessage(messageId, folderPath, saveAttachments, forceLarge, attachmentTimeoutMs) {
               return new Promise((resolve) => {
                 try {
                   const found = findMessage(messageId, folderPath);
@@ -1041,27 +1124,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                         }
 
                         try {
-                          const data = await new Promise((res, rej) => {
-                            const uri = Services.io.newURI(att.url);
-                            NetUtil.asyncFetch(
-                              { uri, loadUsingSystemPrincipal: true },
-                              (inputStream, status) => {
-                                if (!Components.isSuccessCode(status)) {
-                                  rej(new Error(`Fetch failed: ${status}`));
-                                  return;
-                                }
-                                const bis = Cc["@mozilla.org/binaryinputstream;1"]
-                                  .createInstance(Ci.nsIBinaryInputStream);
-                                bis.setInputStream(inputStream);
-                                const chunks = [];
-                                let avail;
-                                while ((avail = bis.available()) > 0) {
-                                  chunks.push(bis.readBytes(avail));
-                                }
-                                res(chunks.join(""));
-                              }
-                            );
-                          });
+                          const data = await fetchAttachmentData(att.url, attachmentTimeoutMs);
 
                           // Name files as <N>-<original-name>
                           const fileName = `${ref.referenceNumber}-${att.name || "attachment"}`;
@@ -1078,7 +1141,14 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                           attInfo.filePath = outFile.path;
                           attInfo.size = data.length;
                         } catch (e) {
-                          attInfo.error = `Save failed: ${e.message || e}`;
+                          const msg = e.message || String(e);
+                          attInfo.error = `Save failed: ${msg}`;
+                          if (msg.includes("timed out")) {
+                            // The message itself is still returned; only this part is missing.
+                            attInfo.deferred = true;
+                            attInfo.hint =
+                              "Run 'thunderbird-cli sync <folder>' to pull the part into the offline store, or raise --attachment-timeout";
+                          }
                         }
 
                         attachments.push(attInfo);
@@ -1577,7 +1647,7 @@ var mcpServer = class extends ExtensionCommon.ExtensionAPI {
                 case "searchMessages":
                   return searchMessages(args.query || "", args.startDate, args.endDate, args.maxResults, args.sortOrder);
                 case "getMessage":
-                  return await getMessage(args.messageId, args.folderPath, args.saveAttachments, args.forceLarge);
+                  return await getMessage(args.messageId, args.folderPath, args.saveAttachments, args.forceLarge, args.attachmentTimeoutMs);
                 case "searchContacts":
                   return searchContacts(args.query || "");
                 case "listCalendars":

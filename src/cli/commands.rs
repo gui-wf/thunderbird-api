@@ -8,6 +8,9 @@ use crate::client::ThunderbirdClient;
 use super::format;
 use super::{Cli, Command};
 
+/// Per-attachment fetch budget handed to the extension; mirrors its own default.
+const DEFAULT_ATTACHMENT_TIMEOUT_MS: u64 = 60_000;
+
 pub fn run(cli: Cli) -> Result<()> {
     let client = ThunderbirdClient::new();
 
@@ -58,16 +61,26 @@ pub fn run(cli: Cli) -> Result<()> {
             folder_path,
             save_attachments,
             force_large,
+            attachment_timeout,
         } => {
-            let result = client.call_tool(
-                "getMessage",
-                json!({
-                    "messageId": message_id,
-                    "folderPath": folder_path,
-                    "saveAttachments": save_attachments,
-                    "forceLarge": force_large,
-                }),
-            )?;
+            let att_timeout = attachment_timeout.unwrap_or(DEFAULT_ATTACHMENT_TIMEOUT_MS);
+            let args = json!({
+                "messageId": message_id,
+                "folderPath": folder_path,
+                "saveAttachments": save_attachments,
+                "forceLarge": force_large,
+                "attachmentTimeoutMs": att_timeout,
+            });
+            let result = if save_attachments {
+                // Fetching parts that are not yet in the offline store goes over IMAP,
+                // which routinely outlives the default 30s HTTP timeout. Outlast the
+                // extension's own per-attachment bound so a stalled part comes back as
+                // a named deferred attachment rather than an opaque global timeout.
+                let http_timeout = Duration::from_millis(att_timeout.saturating_add(30_000));
+                ThunderbirdClient::with_timeout(http_timeout).call_tool("getMessage", args)?
+            } else {
+                client.call_tool("getMessage", args)?
+            };
             format::print_message(&result);
         }
 

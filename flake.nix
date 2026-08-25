@@ -24,7 +24,7 @@
 
           thunderbird-api = pkgs.rustPlatform.buildRustPackage {
             pname = "thunderbird-api";
-            version = "0.4.0";
+            version = "0.4.1";
             src = pkgs.lib.cleanSourceWith {
               src = ./.;
               filter =
@@ -41,7 +41,7 @@
 
           thunderbird-api-extension = pkgs.stdenvNoCC.mkDerivation {
             pname = "thunderbird-api-extension";
-            version = "0.4.0";
+            version = "0.4.3";
             src = ./extension;
 
             dontBuild = true;

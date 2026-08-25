@@ -56,6 +56,10 @@ pub enum Command {
         /// Download attachments larger than 10MB (skipped by default)
         #[arg(long)]
         force_large: bool,
+
+        /// Per-attachment fetch timeout in milliseconds (default: 60000)
+        #[arg(long)]
+        attachment_timeout: Option<u64>,
     },
 
     /// List all mail folders
